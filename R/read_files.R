@@ -11,15 +11,26 @@
 #' @export
 #' @importFrom magrittr %>%
 #' @importFrom rlang exprs
+#' @importFrom stringr str_sub
 #' 
 #' @param files A character vector containing a series of paths to files.
 #' @param ... other arguments passed on to \code{\link[readr]{read_delim}}.
 #' @return A data frame, with file contents concatenated row-wise.
 #' Contains a column \code{file} with the file name of origin for each line of data.
+#' 
+#' @details
+#' \code{read_delim_multi} requires all files to have the same file ending, and thus
+#' the same delimiter.
+#' 
+#' @examples
+#' \dontrun{
+#' read_csv_multi(files = c("subject1.csv", "subject2.csv", "subject3.csv"))
+#' }
 
 read_delim_multi <- function (files, ...) {
   
   dots <- exprs(...)
+  if (length(unique(str_sub(files, -3L, -1L))) > 1) stop("Specified files have different file types, may have different delimiters!")
   out <- tidy_read_files(files, read_delim, dots) %>% try_bind_rows()
   
   return (out)
@@ -31,6 +42,7 @@ read_delim_multi <- function (files, ...) {
 read_csv_multi <- function (files, ...) {
   
   dots <- exprs(...)
+  if (any(!endsWith(files, "csv"))) stop("Not all specified files are CSVs!")
   out <- tidy_read_files(files, read_csv, dots) %>% try_bind_rows()
   
   return (out)
@@ -42,6 +54,7 @@ read_csv_multi <- function (files, ...) {
 read_tsv_multi <- function (files, ...) {
   
   dots <- exprs(...)
+  if (any(!endsWith(files, "tsv"))) stop("Not all specified files are TSVs!")
   out <- tidy_read_files(files, read_tsv, dots) %>% try_bind_rows()
   
   return (out)

@@ -30,3 +30,12 @@ fully long dataframe at once. As with \code{\link[readr]{read_csv}} and \code{\l
 the \code{read_*_multi} versions are special cases of \code{read_delim_multi} for common
 types of flat file data, CSV and TSV.
 }
+\details{
+\code{read_delim_multi} requires all files to have the same file ending, and thus
+the same delimiter.
+}
+\examples{
+\dontrun{
+read_csv_multi(files = c("subject1.csv", "subject2.csv", "subject3.csv"))
+}
+}
