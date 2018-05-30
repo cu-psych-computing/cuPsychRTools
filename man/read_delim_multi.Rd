@@ -33,6 +33,10 @@ types of flat file data, CSV and TSV.
 \details{
 \code{read_delim_multi} requires all files to have the same file ending, and thus
 the same delimiter.
+
+All functions first attempt to use \code{\link[dplyr]{bind_rows}} to combine data, in order
+to preserve column data types as rigorously as possible. If this fails, \code{\link[plyr]{rbind.fill}}
+will instead be used to combine data, which may silently coerce some columns to character.
 }
 \examples{
 \dontrun{
