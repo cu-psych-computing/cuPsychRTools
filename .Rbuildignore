@@ -1,2 +1,4 @@
 .Rproj.user
 cuPsychRTools.Rproj
+^.*\.Rproj$
+^\.Rproj\.user$
