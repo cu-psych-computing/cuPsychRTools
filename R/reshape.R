@@ -33,6 +33,7 @@
 #' value_2 = 0L)
 #' 
 #' super_spread(data, condition, value_1:value_2)
+
 super_spread <- function (data, key, ..., name_order = "key_first", sep = "_",
                           fill = NA, convert = FALSE, drop = TRUE) {
   dots <- exprs(...)
@@ -46,6 +47,36 @@ super_spread <- function (data, key, ..., name_order = "key_first", sep = "_",
   }
   
   output <- spread(output, ukey, value, fill = fill, convert = convert, drop = drop)
+  
+  return (output)
+}
+
+#' Gather columns into key-values pairs.
+#' 
+#' Partially collapse multiple columns into key-values pairs. Use \code{super_gather()}
+#' when you have have multiple wide-form variables that you want to partially collapse,
+#' but you want those gathered variables to stay in separate columns. Equivalent to
+#' calling \code{\link[tidyr]{gather}} separately for dataframes with the same key and
+#' different values, and joining them column-wise back into one dataframe.
+#' 
+#' @param data A data frame.
+#' @param key Names of new key columns, as strings or symbols. Supports multiple keys,
+#' e.g. for crossed experimental conditions. TODO: DOES IT?
+#' @param ... A selection of columns containing data to be collapsed.
+#' @param sep separator to detect key conditions implicit in names of value columns.
+#' @return A data frame.
+
+super_gather <- function (data, key, ..., sep = "[^[:alnum:]]+") {
+  
+  dots <- exprs(...)
+  
+  stopifnot(is_character(key))
+  
+  output <- data %>%
+    gather(gkey, value, UQS(dots)) %>%
+    # TODO: allow further specification of how to split value from condition
+    separate(gkey, into = c("skey", key)) %>%
+    spread(skey, value)
   
   return (output)
 }
