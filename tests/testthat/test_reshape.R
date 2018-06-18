@@ -87,28 +87,28 @@ test_that("super_spread accepts any number of value columns", {
 test_that("super_spread accepts tidyselect vars", {
   # discontinuous value columns
   expect_equal(2 * 3 + 1 + 1, ncol(super_spread(expand.grid(id = 1L:10L,
-                                                        condition = c("a", "b"),
-                                                        value_1 = 0L,
-                                                        value_2 = 1L,
-                                                        value_3 = 2L,
-                                                        value_4 = 3L),
-                                            condition, value_1:value_2, value_4)))
-  # tidyselect helpers for value
-  expect_equal(2 * 3 + 1, ncol(super_spread(expand.grid(id = 1L:10L,
                                                             condition = c("a", "b"),
                                                             value_1 = 0L,
                                                             value_2 = 1L,
-                                                            value_3 = 2L),
-                                                condition, dplyr::starts_with("value"))))
-  # tidyselect helpers for key
-  expect_equal(2^2 * 3 + 1, ncol(super_spread(expand.grid(id = 1L:10L,
-                                                        condition_1 = c("a", "b"),
-                                                        condition_2 = c("c", "d"),
+                                                            value_3 = 2L,
+                                                            value_4 = 3L),
+                                                condition, value_1:value_2, value_4)))
+  # tidyselect helpers for value
+  expect_equal(2 * 3 + 1, ncol(super_spread(expand.grid(id = 1L:10L,
+                                                        condition = c("a", "b"),
                                                         value_1 = 0L,
                                                         value_2 = 1L,
                                                         value_3 = 2L),
-                                            dplyr::starts_with("condition"),
-                                            dplyr::starts_with("value"))))
+                                            condition, dplyr::starts_with("value"))))
+  # tidyselect helpers for key
+  expect_equal(2^2 * 3 + 1, ncol(super_spread(expand.grid(id = 1L:10L,
+                                                          condition_1 = c("a", "b"),
+                                                          condition_2 = c("c", "d"),
+                                                          value_1 = 0L,
+                                                          value_2 = 1L,
+                                                          value_3 = 2L),
+                                              dplyr::starts_with("condition"),
+                                              dplyr::starts_with("value"))))
   # c() in the key argument (since dots only go to value)
   expect_equal(2^2 * 3 + 1, ncol(super_spread(expand.grid(id = 1L:10L,
                                                           condition_1 = c("a", "b"),
@@ -127,15 +127,54 @@ expect_in <- function (object, expected_in) {
 
 test_that("super_spread name_order works", {
   expect_in("a_value_1", names(super_spread(expand.grid(id = 1L:10L,
-                                                  condition = c("a", "b"),
-                                                  value_1 = 0L,
-                                                  value_2 = 1L),
-                                      condition, value_1:value_2,
-                                      name_order = "key_first")))
+                                                        condition = c("a", "b"),
+                                                        value_1 = 0L,
+                                                        value_2 = 1L),
+                                            condition, value_1:value_2,
+                                            name_order = "key_first")))
   expect_in("value_1_a", names(super_spread(expand.grid(id = 1L:10L,
                                                         condition = c("a", "b"),
                                                         value_1 = 0L,
                                                         value_2 = 1L),
                                             condition, value_1:value_2,
                                             name_order = "value_first")))
+})
+
+test_that("super_gather works when fully specified", {
+  expect_equal(10 * 2, nrow(super_gather(data.frame(id = 1:10,
+                                                    value1_cond1 = "a",
+                                                    value1_cond2 = "b",
+                                                    value2_cond1 = 0L,
+                                                    value2_cond2 = 1L,
+                                                    value3_cond1 = "c",
+                                                    value3_cond2 = "d"),
+                                         key_names = c("cond1", "cond2"),
+                                         name_order = "value_first")))
+  expect_equal(10 * 2, nrow(super_gather(data.frame(id = 1:10,
+                                                    value1_cond1 = "a",
+                                                    value1_cond2 = "b",
+                                                    value2_cond1 = 0L,
+                                                    value2_cond2 = 1L,
+                                                    value3_cond1 = "c",
+                                                    value3_cond2 = "d"),
+                                         value_names = c("value1", "value2", "value3"),
+                                         name_order = "value_first")))
+  expect_equal(10 * 2, nrow(super_gather(data.frame(id = 1:10,
+                                                    cond1_value1 = "a",
+                                                    cond2_value1 = "b",
+                                                    cond1_value2 = 0L,
+                                                    cond2_value2 = 1L,
+                                                    cond1_value3 = "c",
+                                                    cond2_value3 = "d"),
+                                         key_names = c("cond1", "cond2"),
+                                         name_order = "key_first")))
+  expect_equal(10 * 2, nrow(super_gather(data.frame(id = 1:10,
+                                                    cond1_value1 = "a",
+                                                    cond2_value1 = "b",
+                                                    cond1_value2 = 0L,
+                                                    cond2_value2 = 1L,
+                                                    cond1_value3 = "c",
+                                                    cond2_value3 = "d"),
+                                         value_names = c("value1", "value2", "value3"),
+                                         name_order = "key_first")))
 })

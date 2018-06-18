@@ -4,7 +4,7 @@
 \alias{super_spread}
 \title{Spread key-values pairs across multiple columns.}
 \usage{
-super_spread(data, key, ..., name_order = "key_first", sep = "_",
+super_spread(data, key, ..., name_order = "value_first", sep = "_",
   fill = NA, convert = FALSE, drop = TRUE)
 }
 \arguments{
@@ -20,7 +20,7 @@ do not need to be grouped using \code{\link[base]{c}}; all names passed in
 as \code{...} are assumed to be value columns.}
 
 \item{name_order}{Which identifier comes first in final colname?
-Choose \code{"key_first"} or \code{"value_first"}. Defaults to \code{"key_first"}.}
+Choose \code{"key_first"} or \code{"value_first"}. Defaults to \code{"value_first"}.}
 
 \item{sep}{Separator to use between values, ultimately ending up in colnames.
 Passed to \code{\link[tidyr]{unite}}.}
