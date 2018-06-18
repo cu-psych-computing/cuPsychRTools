@@ -19,7 +19,7 @@
 #' do not need to be grouped using \code{\link[base]{c}}; all names passed in
 #' as \code{...} are assumed to be value columns.
 #' @param name_order Which identifier comes first in final colname?
-#' Choose \code{"key_first"} or \code{"value_first"}. Defaults to \code{"key_first"}.
+#' Choose \code{"key_first"} or \code{"value_first"}. Defaults to \code{"value_first"}.
 #' @param sep Separator to use between values, ultimately ending up in colnames.
 #' Passed to \code{\link[tidyr]{unite}}.
 #' @inheritParams tidyr::spread
@@ -34,7 +34,7 @@
 #' 
 #' super_spread(data, condition, value_1:value_2)
 
-super_spread <- function (data, key, ..., name_order = "key_first", sep = "_",
+super_spread <- function (data, key, ..., name_order = "value_first", sep = "_",
                           fill = NA, convert = FALSE, drop = TRUE) {
   dots <- exprs(...)
   key <- enquo(key)
@@ -56,27 +56,71 @@ super_spread <- function (data, key, ..., name_order = "key_first", sep = "_",
 #' Partially collapse multiple columns into key-values pairs. Use \code{super_gather()}
 #' when you have have multiple wide-form variables that you want to partially collapse,
 #' but you want those gathered variables to stay in separate columns. Equivalent to
-#' calling \code{\link[tidyr]{gather}} separately for dataframes with the same key and
-#' different values, and joining them column-wise back into one dataframe.
+#' calling \code{\link[tidyr]{gather}} separately for dataframes with the \emph{same key} and
+#' different values, and joining them column-wise back into one dataframe. Requires the common
+#' key(s) to be spelled identically in names of columns to be gathered.
+#' 
+#' Expects that the only non-alphanumeric character appearing in the column names to be gathered is
+#' the delimiter between the key and value names.
+#' 
+#' @export
+#' @importFrom dplyr matches
+#' @importFrom magrittr %>%
+#' @importFrom rlang is_character
+#' @importFrom tidyr gather separate spread
 #' 
 #' @param data A data frame.
-#' @param key Names of new key columns, as strings or symbols. Supports multiple keys,
-#' e.g. for crossed experimental conditions. TODO: DOES IT?
-#' @param ... A selection of columns containing data to be collapsed.
-#' @param sep separator to detect key conditions implicit in names of value columns.
-#' @return A data frame.
+#' @param key Name of new key column, as string.
+#' @param key_names Names of key levels present in column names to be gathered,
+#' as character vector. Specify either this or \code{value_names} but not both.
+#' If both this and \code{value_names} are specified, will \emph{only} use
+#' key names to identify columns to gather.
+#' @param value_names Names of value levels present in column names to be gathered,
+#' as character vector. Specify either this or \code{key_names} but not both.
+#' @param name_order Which identifier comes first in existing colnames? Used to assist in
+#' identifying which columns to gather. Choose \code{"key_first"} or \code{"value_first"}.
+#' @return A data frame, with all indicated columns gathered, but separate.
+#' 
+#' @examples
+#' data <- data.frame(id = 1:10,
+#' value1_cond1 = "a",
+#' value1_cond2 = "b",
+#' value2_cond1 = 0L,
+#' value2_cond2 = 1L)
+#' 
+#' super_gather(data, "condition", key_names = c("cond1", "cond2"), name_order = "value_first")
+#' super_gather(data, "condition", value_names = c("value1", "value2"), name_order = "value_first")
 
-super_gather <- function (data, key, ..., sep = "[^[:alnum:]]+") {
+super_gather <- function (data, key = "key", key_names = NULL, value_names = NULL, name_order) {
   
-  dots <- exprs(...)
+  stopifnot(is_character(key), (!is.null(key_names) | !is.null(value_names)))
+  if (!is.null(key_names) & !is.null(value_names)) {
+    warning("Both key names and value names specified! Defaulting to select with key names.")
+    value_names <- NULL
+  }
+  gather_names <- c(key_names, value_names)
   
-  stopifnot(is_character(key))
+  if (name_order == "key_first") {
+    intos <- c(key, "skey")
+    if (!is.null(key_names)) {
+      gather_regexp  <- paste0("^", gather_names, collapse = "|")
+    } else {
+      gather_regexp <- paste0(gather_names, "$", collapse = "|")
+    }
+  } else if (name_order == "value_first") {
+    intos <- c("skey", key)
+    if (!is.null(key_names)) {
+      gather_regexp  <- paste0(gather_names, "$", collapse = "|")
+    } else {
+      gather_regexp <- paste0("^", gather_names, collapse = "|")
+    }
+  }
   
   output <- data %>%
-    gather(gkey, value, UQS(dots)) %>%
-    # TODO: allow further specification of how to split value from condition
-    separate(gkey, into = c("skey", key)) %>%
+    gather(gkey, value, matches(gather_regexp)) %>%
+    separate(gkey, into = intos) %>% 
     spread(skey, value)
+    # TODO: allow further specification of how to split value from condition
   
   return (output)
 }
