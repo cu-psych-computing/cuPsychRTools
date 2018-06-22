@@ -10,6 +10,7 @@ LazyData: true
 Imports: dplyr,
   magrittr,
   plyr,
+  purrr,
   readr,
   rlang,
   stringr,

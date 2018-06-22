@@ -73,8 +73,9 @@ read_tsv_multi <- function (files, ...) {
 #' @param dots captured additional args to pass into \code{FUN}
 #' @return A list of dataframes.
 #' 
-#' @importFrom dplyr do group_by mutate summarize
+#' @importFrom dplyr mutate
 #' @importFrom magrittr %>%
+#' @importFrom purrr map
 #' @importFrom readr read_delim read_csv read_tsv
 #' @importFrom rlang UQS
 #' @importFrom tibble tibble
@@ -82,10 +83,8 @@ read_tsv_multi <- function (files, ...) {
 tidy_read_files <- function (files, FUN, dots) {
   
   out <- tibble(this_file = files) %>%
-    group_by(this_file) %>%
-    do(raw = FUN(.$this_file, UQS(dots))) %>%
-    summarize(data = list(mutate(raw,
-                                 file = this_file)))
+    mutate(data = map(this_file, ~ FUN(.x, UQS(dots)) %>%
+                       mutate(file = .x)))
   
   return (out$data)
 }
