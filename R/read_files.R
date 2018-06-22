@@ -29,6 +29,9 @@
 #' @examples
 #' \dontrun{
 #' read_csv_multi(files = c("subject1.csv", "subject2.csv", "subject3.csv"))
+#' 
+#' these_files <- endsWith(list.files("path/to/data/folder"), ".csv")
+#' read_csv_multi(these_files)
 #' }
 
 read_delim_multi <- function (files, ...) {
