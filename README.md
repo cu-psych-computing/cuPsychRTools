@@ -18,4 +18,4 @@ This package currently functions as a catch-all package for various data reading
 
 ## Contact
 
-Currently maintained in the Columbia University psychology department, care of [Monica Thieu](github.com/monicathieu). Please create pull requests/issues in this repo to communicate about code stuff, or [email Monica](mailto:monica.thieu@columbia.edu) for general questions or thoughts.
+Currently maintained in the Columbia University psychology department, care of [Monica Thieu](https://github.com/monicathieu). Please create pull requests/issues in this repo to communicate about code stuff, or [email Monica](mailto:monica.thieu@columbia.edu) for general questions or thoughts.
