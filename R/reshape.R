@@ -125,7 +125,7 @@ super_gather <- function (data, key = "key", key_names = NULL, value_names = NUL
   # so that the subsequent renaming of name_part and other_part will be the user-specified key name
   names(intos)[1] = key
   
-  output <- data %>
+  output <- data %>%
     gather(gkey, value, dplyr::matches(gather_regexp)) %>%
     cbind(str_locate_whichever(.$gkey, gather_names)) %>%
     as_tibble() %>%
