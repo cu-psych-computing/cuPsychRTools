@@ -1,6 +1,6 @@
 Package: cuPsychRTools
 Title: R helper functions compiled by Columbia Psychology
-Version: 0.0.0
+Version: 0.0.1
 Authors@R: person("Monica", "Thieu", email = "monica.thieu@columbia.edu",
                   role = c("aut", "cre"))
 Description: This package contains a miscellaneous arrangement of R helper functions that members of the Columbia psychology department have written to make their own lives a little easier. Hopefully they can make your life easier too!

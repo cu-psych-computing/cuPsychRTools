@@ -60,13 +60,11 @@ super_spread <- function (data, key, ..., name_order = "value_first", sep = "_",
 #' different values, and joining them column-wise back into one dataframe. Requires the common
 #' key(s) to be spelled identically in names of columns to be gathered.
 #' 
-#' Expects that the only non-alphanumeric character appearing in the column names to be gathered is
-#' the delimiter between the key and value names.
-#' 
 #' @export
-#' @importFrom dplyr matches
+#' @importFrom dplyr as_tibble if_else matches mutate rename select
 #' @importFrom magrittr %>%
 #' @importFrom rlang is_character
+#' @importFrom stringr str_sub
 #' @importFrom tidyr gather separate spread
 #' 
 #' @param data A data frame.
@@ -79,7 +77,13 @@ super_spread <- function (data, key, ..., name_order = "value_first", sep = "_",
 #' as character vector. Specify either this or \code{key_names} but not both.
 #' @param name_order Which identifier comes first in existing colnames? Used to assist in
 #' identifying which columns to gather. Choose \code{"key_first"} or \code{"value_first"}.
+#' @param delim_nchar How many characters delimit between key and value names? Defaults to 1.
 #' @return A data frame, with all indicated columns gathered, but separate.
+#' 
+#' @details
+#' Implements a strategy akin to calling \code{\link[tidyr]{gather}}, \code{\link[tidyr]{separate}}, and
+#' \code{\link[tidyr]{spread}} in succession. As a result, may coerce some columns to character
+#' under the hood. Please pay attention to warnings.
 #' 
 #' @examples
 #' data <- data.frame(id = 1:10,
@@ -91,7 +95,7 @@ super_spread <- function (data, key, ..., name_order = "value_first", sep = "_",
 #' super_gather(data, "condition", key_names = c("cond1", "cond2"), name_order = "value_first")
 #' super_gather(data, "condition", value_names = c("value1", "value2"), name_order = "value_first")
 
-super_gather <- function (data, key = "key", key_names = NULL, value_names = NULL, name_order) {
+super_gather <- function (data, key = "key", key_names = NULL, value_names = NULL, name_order, delim_nchar = 1) {
   
   stopifnot(is_character(key), (!is.null(key_names) | !is.null(value_names)))
   if (!is.null(key_names) & !is.null(value_names)) {
@@ -100,27 +104,36 @@ super_gather <- function (data, key = "key", key_names = NULL, value_names = NUL
   }
   gather_names <- c(key_names, value_names)
   
-  if (name_order == "key_first") {
-    intos <- c(key, "skey")
-    if (!is.null(key_names)) {
+  if (!is.null(key_names)) {
+    intos = list(key = "name_part",
+                 skey = "other_part")
+    if (name_order == "key_first") {
       gather_regexp  <- paste0("^", gather_names, collapse = "|")
-    } else {
-      gather_regexp <- paste0(gather_names, "$", collapse = "|")
-    }
-  } else if (name_order == "value_first") {
-    intos <- c("skey", key)
-    if (!is.null(key_names)) {
+    } else if (name_order == "value_first") {
       gather_regexp  <- paste0(gather_names, "$", collapse = "|")
-    } else {
+    }
+  } else if (!is.null(value_names)) {
+    intos = list(skey = "name_part",
+                 key = "other_part")
+    if (name_order == "key_first") {
+      gather_regexp <- paste0(gather_names, "$", collapse = "|")
+    } else if (name_order == "value_first") {
       gather_regexp <- paste0("^", gather_names, collapse = "|")
     }
   }
   
   output <- data %>%
-    gather(gkey, value, matches(gather_regexp)) %>%
-    separate(gkey, into = intos) %>% 
+    gather(gkey, value, dplyr::matches(gather_regexp)) %>%
+    cbind(str_locate_whichever(.$gkey, gather_names)) %>%
+    as_tibble() %>%
+    mutate(name_part = str_sub(gkey, start = start, end = end),
+           other_part = if_else(start != 1,
+                                str_sub(gkey, end = start - (delim_nchar + 1)),
+                                str_sub(gkey, start = end + (delim_nchar + 1)))) %>%
+    rename(!!! intos) %>%
+    select(-gkey, -start, -end) %>%
     spread(skey, value)
-    # TODO: allow further specification of how to split value from condition
+  
   
   return (output)
 }

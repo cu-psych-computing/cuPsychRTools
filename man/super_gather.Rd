@@ -5,7 +5,7 @@
 \title{Gather columns into key-values pairs.}
 \usage{
 super_gather(data, key = "key", key_names = NULL, value_names = NULL,
-  name_order)
+  name_order, delim_nchar = 1)
 }
 \arguments{
 \item{data}{A data frame.}
@@ -22,6 +22,8 @@ as character vector. Specify either this or \code{key_names} but not both.}
 
 \item{name_order}{Which identifier comes first in existing colnames? Used to assist in
 identifying which columns to gather. Choose \code{"key_first"} or \code{"value_first"}.}
+
+\item{delim_nchar}{How many characters delimit between key and value names? Defaults to 1.}
 }
 \value{
 A data frame, with all indicated columns gathered, but separate.
@@ -35,8 +37,9 @@ different values, and joining them column-wise back into one dataframe. Requires
 key(s) to be spelled identically in names of columns to be gathered.
 }
 \details{
-Expects that the only non-alphanumeric character appearing in the column names to be gathered is
-the delimiter between the key and value names.
+Implements a strategy akin to calling \code{\link[tidyr]{gather}}, \code{\link[tidyr]{separate}}, and
+\code{\link[tidyr]{spread}} in succession. As a result, may coerce some columns to character
+under the hood. Please pay attention to warnings.
 }
 \examples{
 data <- data.frame(id = 1:10,
