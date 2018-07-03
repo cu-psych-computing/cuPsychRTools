@@ -41,5 +41,8 @@ will instead be used to combine data, which may silently coerce some columns to 
 \examples{
 \dontrun{
 read_csv_multi(files = c("subject1.csv", "subject2.csv", "subject3.csv"))
+
+these_files <- endsWith(list.files("path/to/data/folder"), ".csv")
+read_csv_multi(these_files)
 }
 }
