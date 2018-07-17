@@ -1,0 +1,669 @@
+---
+title: "Bootstrapping regression model parameters (tidy-ly)"
+author: "Monica Thieu"
+date: "June 28, 2018"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require(lme4)
+require(tidyverse)
+require(rsample)
+require(broom)
+```
+
+# What's in store?
+
+After reading this vignette, I hope that you will be able to:
+
+* Understand the difference between parametric, semi-parametric, and non-parametric bootstrapping
+* Implement each of the three bootstrapping methods in a `tidyverse`-compatible manner 
+* Understand bootstrapping strategies specific to data with multilevel structure
+
+# Bootstrapping! what is it good for?
+
+Bootstrapping leverages computing power and frequentist statistical logic to empirically approximate sampling distributions for statistical estimators where we can't use quick formulas to find their standard errors.
+
+Bootstrapping itself is the process of creating new "samples" from an existing dataset by resampling the original data _with replacement._ If we create many new "samples", and estimate our statistic(s) of interest for each of these samples, we can collect all of these estimates across our "samples" to form an empirical estimate of the sampling distribution of said statistic(s).
+
+Anytime you have an estimate from a model, and you'd like to get a second opinion on the standard error of that estimate, bootstrapping can be of service. For features of a model that R doesn't automatically calculate an error for (for example, the estimated standard error of a coefficient), we can numerically approximate these error values through bootstrapping their sampling distributions.
+
+# What's the difference, anyway?
+
+All bootstrapping methods are not the same!
+
+* **Parametric** bootstrapping assumes that:
+    + we know the true values of the generating model
+    + we know the true shape/size of the noise distribution around the generating model
+* **Semi-parametric** bootstrapping assumes that:
+    + we know the true values of the generating model
+    + we do not know the true shape/size of the noise distribution
+* **Non-parametric** bootstrapping assumes that:
+    + we do not know the true values of the generating model
+    + we do not know the true shape/size of the noise distribution
+
+As with most parametric vs non-parametric methods, there's a tradeoff between these different bootstrapping methods. Parametric bootstrapping tends to yield narrower sampling distributions, which, if we're right about our assumptions, gives us a more precise estimate of the sampling distribution. On the other hand, non-parametric bootstrapping makes the fewest assumptions about the (ultimately unknowable) nature of the data-generating process, and so while non-parametric sampling distributions tend to be wider, we can feel more safe about the conclusions we draw from the locations of sampling distributions. (Semi-parametric bootstrapping is, as you'd guess, somewhere in between.)
+
+It's up to you to decide which bootstrapping method is most suitable for your needs--each has its own time and place.
+
+Let's imagine that we have a dataset with n independent observations of some outcome and predictors. Here's how we might bootstrap the sampling distribution of a statistic from a linear regression fit to this dataset.
+
+* **Parametric**
+    + Generate _n_ new noise-free predicted values using coefficients of original estimated model
+    + Add a noise term, randomly generated from a user-specified distribution, to each predicted value
+    + Re-fit model to new values
+    + Record parameter of interest from re-fit model
+    + Rinse and repeat
+* **Semi-parametric**
+    + Generate _n_ new noise-free predicted values using coefficients of original estimated model
+    + Gather all residuals of original data from original estimated model into an empirical noise distribution
+    + For each of _n_ predicted values, draw a residual from empirical noise distribution _with replacement_ and add to predicted value as noise term
+    + Re-fit model to new values
+    + Record parameter of interest from re-fit model
+    + Etc. etc.
+* **Non-parametric**
+    + Gather original data into empirical data distribution
+    + Generate _n_ new _data observations_ by drawing _n_ times from empirical data distribution _with replacement_
+    + Re-fit model to new values
+    + Record parameter of interest from re-fit model
+    + You get the drill
+
+Computers are great, and constantly getting more powerful, so run-time is not the boogeyman for most bootstrapping jobs, if you're doing linear regression with no multilevel effects (we'll get to multilevel data later--that's a whole other beast).
+
+Still, when bootstrapping model parameters, you can see that **all bootstrapping methods require re-fitting the model on every bootstrap iteration.** If your iteration counts are getting up into the thousands, or if you have to run some emergency bootstrapping analyses on a small laptop in a pinch, you'll benefit from implementation that leverages vectorized operations on special data structures to speed up processing and minimize memory cost. For this reason, all the following bootstrapping demonstrations will be written within the `tidyverse` function environment, and assume some familiarity with tidy data structure.
+
+# Example: bootstrapping SE for regression coefficient, simulated linear/normal data
+
+First, let's generate an "original" dataset to work with here. I'm using simulated data, as opposed to a real-world dataset, so that we can actually specify the true generating model and compare our estimated results to "real" values.
+
+```{r}
+data <- tibble(id = 1:100) %>%
+  mutate(intercept_true = 1,
+         slope_true = 0.7,
+         noise_sd_true = 2,
+         x = rnorm(n(), mean = 0, sd = 2), # dplyr::n() is a tidy helper that returns n_observations in the current group
+         y = intercept_true + slope_true*x + rnorm(n(), mean = 0, sd = noise_sd_true))
+
+head(data)
+```
+
+```{r}
+data %>%
+  ggplot(aes(x = x, y = y)) +
+  geom_point() +
+  theme_bw()
+```
+
+Now, to fit our initial regression model to get our estimated coefficients:
+
+```{r}
+model <- lm(y ~ x, data = data)
+
+summary(model)
+```
+
+The estimated standard error on the coefficient for x is about `r signif(summary(model)$coefficients[2, "Std. Error"], 1)`. We can roll with this, but if you were going to stop there you wouldn't be reading this vignette, would you? Let's estimate the sampling distribution of this coefficient!
+
+## Parametric
+
+Let's refresh on what steps we're going to take to construct a **parametric** bootstrapped sampling distribution of the slope coefficient:
+
++ Generate _n_ new noise-free predicted values using coefficients of original estimated model
++ Add a noise term, randomly generated from a user-specified distribution, to each predicted value
++ Re-fit model to new values
++ Record parameter of interest from re-fit model
++ Rinse and repeat
+
+These steps serve as handy pseudo-code for the R implementation we'll write next.
+
+For transparency, I'll be keeping each generated dataset in the master bootstrapping tibble. This will take up as much memory as the size of your original data times the number of bootstrapping iterations. If you're interested in minimizing memory cost as much as possible, you can implement this in a way where the bootstrapped data for each iteration is generated immediately pre-model fitting and then deleted before the model results are output. For teaching purposes, though, it's easiest to see how each bootstrapped model coefficient is generated when the data stay in the master tibble.
+
+How many bootstrapping iterations shall we run?
+
+```{r}
+n_boots <- 1000L # Putting L after a number instructs R to initialize it as an integer. Saves a wee bit of memory, I just like to do it but it's not necessary unless you need it for tidyverse strict typing
+```
+
+For our parametric bootstrap, we first need to define the parameters we'll use to generate our fake datasets. Specifically, we need to define:
+
+* how we'll generate predictor values (`x`)
+* the model we'll use to generate `y` from these `x`
++ the coefficients we'll plug into this model
+
+### Generating bootstrapped datasets
+
+To generate `x`, we can make the assumption that true `x` is normally distributed, so we can draw n values of x using `rnorm()` with mean and SD parameters equal to the empirical mean and SD of our original `x`.
+
+```{r}
+x_params_emp <- data %>%
+  summarize_at(vars(x), c("length", "mean", "sd"))
+x_params_emp
+```
+
+Above, we can see the empirical mean and SD of our original `x` is fairly close to the parameters we first used to generate the data. Calculating the length here makes it quicker for us to reference the number of observations in the original data, so we can set our bootstrapped datasets to be the same size.
+
+Then, to generate y values, we'll use the model `y = intercept + slope*x + error`. We can pull the three coefficients we need from the original estimated model--for the intercept and slope, we'll use their estimated coefficients, and for the error, we'll use the estimated residual standard error.
+
+```{r}
+model_coefs <- coef(model)
+model_sigma <- summary(model)$sigma
+
+c(model_coefs, model_sigma)
+```
+
+Parametric bootstrapping has one last assumption we need to specify: the distribution of the error terms to be drawn. Linear regression already assumes normally distributed residuals, so if we're going full steam ahead with testing our linear regression it's natural to use `rnorm(mean = 0, sd = model_sigma)` to generate our fake error term.
+
+```{r}
+boots_parametric <- tibble(iteration = 1:n_boots) %>%
+  mutate(data_boot = rerun(n(), # purrr::rerun() is a tidy alternative to replicate(), when you just need to run something a bunch of times but each run is independent of each other run
+                           # First: we'll generate our fake x
+                           tibble(x = rnorm(x_params_emp$length,
+                                            mean = x_params_emp$mean,
+                                            sd = x_params_emp$sd)) %>%
+                             # Then we'll generate our fake y, according to the model we specified
+                             mutate(y = model_coefs[1] +
+                                      model_coefs[2]*x +
+                                      rnorm(nrow(.), mean = 0, sd = model_sigma))))
+
+head(boots_parametric)
+```
+
+Above, you can see that we've used `tibble()` inside of `purrr::rerun()` to create a list-column for the data. Each element of our list-column (corresponding to each bootstrap iteration) contains a tibble with n observations of a new, fake x and y. Let's take a look at the data for one of these bootstrap iterations.
+
+```{r}
+# Remember that to index into list-columns, we use double brackets [[]] to access the actual element
+head(boots_parametric$data_boot[[1]])
+```
+
+### Fitting a model to each dataset
+
+So now we have a column containing 100 parametrically bootstrapped datasets, each conveniently packaged into its own tibble. Let's move onto the next step of our bootstrapping analysis: fitting new models to each dataset. This is where nesting our data inside of list-columns, such that we have one row per iteration, becomes super useful.
+
+```{r}
+boots_parametric <- boots_parametric %>%
+  mutate(model_boot = map(data_boot, ~lm(y ~ x, data = .)))
+
+head(boots_parametric)
+```
+
+Using `purrr::map()`, we can feed each row of bootstrapped data into an `lm()` call and store each model output in the same row as the data it was generated from. If you want to interrogate any of these bootstrapped models individually, you can reach into the list-column and do so:
+
+```{r}
+summary(boots_parametric$model_boot[[1]])
+```
+
+It's a model like any other!
+
+### Extracting coefficients from bootstrapped models
+
+Now, it's time for the last step of the bootstrapping analysis: extracting each of the coefficient estimates from our bootstrapped models and looking at the distribution of the estimates across iterations. `broom::tidy()` is perfect for this: it takes a model object as input, and returns the relevant coefficients in long data-frame form. I think of it as `coef()` on steroids. Here's an example of the output of `tidy()` from one model so you can see what it gives you:
+
+```{r}
+# This is the model we fit to the original data
+tidy(model)
+```
+
+It's in pristine tidy-form: each row is a term in the model, and each column is a relevant value for that term. Yum!
+
+```{r}
+boots_parametric <- boots_parametric %>%
+  mutate(coefs_boot = map(model_boot, ~as_tibble(tidy(.)))) # tidy() automatically outputs a data.frame; I prefer to coerce it to a tibble for consistency
+```
+
+Again, let's look at the first element in the `coefs_boot` list-column to make sure it contains what we expect.
+
+```{r}
+boots_parametric$coefs_boot[[1]]
+```
+
+```{r}
+estimates_parametric <- boots_parametric %>%
+  select(iteration, coefs_boot) %>%
+  unnest(coefs_boot) # tidyr::unnest() unwraps a tibble-based list-column to make fully long-form data
+
+head(estimates_parametric)
+```
+
+You can see that by retaining the `iteration` column and `tidyr::unnest()`-ing the `coefs_boot` column, we get some familiar-looking long-form data, where each iteration has a row for the intercept coefficient and a row for the slope coefficient of `x`.
+
+Now, our parametric bootstrapping analysis is complete! All we need to do now is inspect our bootstrapped sampling distributions.
+
+PS: You'll notice that by setting up our bootstrapping in a vectorized way, where we specified the number of iterations at the very beginning and completed each bootstrapping step simultaneously for every iteration using tidy vectorized functions, we obviated the step of building a slow, unwieldy for-loop. Instead, we can store all data & models from all iterations in one convenient tibble, and operate on them all at once.
+
+### Graphing bootstrapped sampling distribution
+
+```{r}
+estimates_parametric %>%
+  filter(term == "x") %>% # Let's just look at the plots for the slope estimate right now
+  ggplot(aes(x = estimate)) +
+  geom_histogram(binwidth = .02, fill = "chartreuse") +
+  geom_vline(xintercept = model_coefs[2], linetype = 3, size = 1, color = "magenta") +
+  geom_vline(aes(xintercept = median(estimate)), linetype = 3, size = 1, color = "purple3") +
+  theme_bw()
+```
+
+The pink line is the value of the original estimated coefficient, while the purple line is the median value of all the bootstrapped coefficients. The bootstrapped sampling distribution is centered roughly on the value of the original estimate, with a standard deviation of about `r signif(sd(estimates_parametric$estimate[estimates_parametric$term == "x"]), 1)`.
+
+### Bonus: bootstrapping a power analysis
+
+## Semi-parametric
+
+The primary difference in the three bootstrapping methods is **how the bootstrapped datasets are generated.** All steps after data generation (model fitting, coefficient extraction, summary graphing) are identical across bootstrapping methods. Because of this, we can move a bit more quickly through the code and data inspection for the rest of this vignette.
+
+First, what are the steps we need to follow?
+
++ Generate _n_ new noise-free predicted values using coefficients of original estimated model
++ Gather all residuals of original data from original estimated model into an empirical noise distribution
++ For each of _n_ predicted values, draw a residual from empirical noise distribution _with replacement_ and add to predicted value as noise term
++ Re-fit model to new values
++ Record parameter of interest from re-fit model
++ Do all of the above for as many iterations as you wish
+
+The key difference between semi-parametric and parametric bootstrapping is in the error term that's added onto the predicted values. Both methods involve generating noise-free predicted `y` using coefficients estimated from the original model, and then adding a noise term to each `y`. However, while we assumed normally distributed errors in our parametric bootstrapping, and used `rnorm()` to generate those errors, in the current semi-parametric analysis we are going to generate error terms _by sampling error residuals with replacement from our existing data/model._
+
+By using our empirical distribution of residuals, we aren't making assumptions about the noise-generating distribution (but we ARE still making an assumption about the model that ultimately generates our outcome values).
+
+### Generating bootstrapped datasets
+
+```{r}
+# These are going to be sample()-d to form our error terms in our bootstrapped data
+model_residuals <- model$residuals
+
+boots_semiparametric <- tibble(iteration = 1:n_boots) %>%
+  mutate(data_boot = rerun(n(),
+                           # First: we'll generate our fake x, exactly the same as parametric
+                           tibble(x = rnorm(x_params_emp$length,
+                                            mean = x_params_emp$mean,
+                                            sd = x_params_emp$sd)) %>%
+                             # Then we'll generate our fake y, according to the model we specified
+                             mutate(y = model_coefs[1] +
+                                      model_coefs[2]*x +
+                                      # BUT! We're no longer using rnorm() to generate a vector of errors
+                                      # Instead, we'll generate a vector of errors by sample(replace = T)-ing the original residuals
+                                      sample(model_residuals, size = nrow(.), replace = T))))
+```
+
+### Fitting a model to each dataset
+
+```{r}
+boots_semiparametric <- boots_semiparametric %>%
+  mutate(model_boot = map(data_boot, ~lm(y ~ x, data = .)))
+```
+
+
+### Extracting coefficients from bootstrapped models
+
+```{r}
+boots_semiparametric <- boots_semiparametric %>%
+  mutate(coefs_boot = map(model_boot, ~as_tibble(tidy(.))))
+
+estimates_semiparametric <- boots_semiparametric %>%
+  select(iteration, coefs_boot) %>%
+  unnest(coefs_boot)
+```
+
+### Graphing bootstrapped sampling distribution
+
+```{r}
+estimates_semiparametric %>%
+  filter(term == "x") %>% # Let's just look at the plots for the slope estimate right now
+  ggplot(aes(x = estimate)) +
+  geom_histogram(binwidth = .02, fill = "chartreuse") +
+  geom_vline(xintercept = model_coefs[2], linetype = 3, size = 1, color = "magenta") +
+  geom_vline(aes(xintercept = median(estimate)), linetype = 3, size = 1, color = "purple3") +
+  theme_bw()
+```
+
+This time, the standard deviation of our semi-parametric bootstrapped sampling distribution is about `r signif(sd(estimates_semiparametric$estimate[estimates_semiparametric$term == "x"]), 1)`.
+
+## Non-parametric
+
+All right, we've arrived at the Wild West section of our bootstrapping tour, where there are no assumptions, only empirical observations! From parametric to semi-parametric bootstrapping, we released our assumption about the distribution of the residuals/noise terms. Now, from semi-parametric to non-parametric bootstrapping, we'll release our other, bigger, assumption: that we know the model that's generating predicted `y` values from `x` values.
+
+The steps for this bootstrapping analysis:
++ Gather original data into empirical data distribution
++ Generate _n_ new _data observations_ by drawing _n_ times from empirical data distribution _with replacement_
++ Re-fit model to new values
++ Record parameter of interest from re-fit model
++ Do this for all iterations
+
+Instead of using a formula to generate noise-free predicted `y` values from `x` values, we won't use any formula to generate `y` from `x`. We'll use our original data as an empirical distribution, and resample existing observations from this empirical distribution with replacement to get bootstrapped datasets of the right size.
+
+After resampling the data, the model fitting and coefficient extraction again proceed exactly as they do for parametric and semi-parametric bootstrapping.
+
+### Generating bootstrapped datasets
+
+For this non-parametric bootstrap, we're going to use a slightly different method to generate our resampled datasets. If we wanted to resample the data ourselves, analogous to how we've been generating bootstrapped data ourselves in the previous two examples, we could certainly use `sample(replace = T)` to collect rows from our original data into a new bootstrapped dataset of the same length as our original data.
+
+However, `rsample::bootstraps()` will do exactly this, and with a little bit of R magic under the hood that allows the resampled datasets _not to take up a proportional amount of memory._
+
+```{r}
+# This one call will do all the heavy resampling lifting!
+boots_nonparametric <- rsample::bootstraps(data = data, times = n_boots) %>%
+  mutate(iteration = 1:n()) # I just want to have an "iteration" column analogous to that of the other bootstrap tibbles
+
+head(boots_nonparametric)
+```
+
+`bootstraps()` outputs a tibble with one row for every one of the iterations you specified in the `times` argument. The `rsplit` objects you see in the `splits` column contain metadata that allows you to recreate resampled datasets, but the `rsplit` objects themselves are much smaller than the dataframes they're coding for. We can see how this works here:
+
+```{r}
+head(as_tibble(boots_nonparametric$splits[[1]])) # dplyr::as_tibble() is like as.data.frame(), but better
+```
+
+The expanded tibble form of the first `rsplit` resampled dataset contains all the columns that appear in `data`, because it's assembled from `data`.
+
+If we want, we can create a new list-column in our non-parametric master tibble that contains all the expanded datasets, just to be transparent.
+
+```{r}
+boots_nonparametric <- boots_nonparametric %>%
+  mutate(data_boot = map(splits, ~as_tibble(.)))
+```
+
+Yes, this defeats the purpose of the whole memory-saving nature of the `rsplit` objects. ¯\_(ツ)_/¯ If you want to be a full memory saver, you can skip creating a new list-column of expanded datasets, and instead nest the `as_tibble()` call INSIDE of the next modeling call, in a way like `model_boot = map(splits, ~lm(y ~ x, data = as_tibble(.)))`. It's up to you in your own analysis--for now, I'll leave the datasets expanded.
+
+Now that our resampled datasets are generated, let's keep on cruising with model fitting and coefficient extraction!
+
+### Fitting a model to each dataset
+
+```{r}
+boots_nonparametric <- boots_nonparametric %>%
+  mutate(model_boot = map(data_boot, ~lm(y ~ x, data = .)))
+```
+
+### Extracting coefficients from bootstrapped models
+
+```{r}
+boots_nonparametric <- boots_nonparametric %>%
+  mutate(coefs_boot = map(model_boot, ~as_tibble(tidy(.))))
+
+estimates_nonparametric <- boots_nonparametric %>%
+  select(iteration, coefs_boot) %>%
+  unnest(coefs_boot)
+```
+
+### Graphing bootstrapped sampling distribution
+
+```{r}
+estimates_nonparametric %>%
+  filter(term == "x") %>% # Let's just look at the plots for the slope estimate right now
+  ggplot(aes(x = estimate)) +
+  geom_histogram(binwidth = .02, fill = "chartreuse") +
+  geom_vline(xintercept = model_coefs[2], linetype = 3, size = 1, color = "magenta") +
+  geom_vline(aes(xintercept = median(estimate)), linetype = 3, size = 1, color = "purple3") +
+  theme_bw()
+```
+
+This time, the standard deviation of our semi-parametric bootstrapped sampling distribution is about `r signif(sd(estimates_nonparametric$estimate[estimates_nonparametric$term == "x"]), 1)`.
+
+## Comparing the three methods
+
+Now that we've constructed bootstrapped sampling distributions three ways, let's see how they compare to one another!
+
+First, we can combine all of our separate estimates tibbles into one large tibble for graphing, using `dplyr::bind_rows()`.
+
+```{r}
+estimates <- bind_rows(parametric = estimates_parametric,
+                       semiparametric = estimates_semiparametric,
+                       nonparametric = estimates_nonparametric,
+                       .id = "method") # If you name your df arguments, they will appear as values in a new column named whatever you specify in the .id argument
+
+head(estimates)
+```
+
+Using the `.id` argument in `bind_rows()` allows us to automatically create a column identifying which bootstrap method each estimate was derived from.
+
+```{r}
+estimates %>%
+  filter(term == "x") %>% # Let's just look at the plots for the slope estimate right now
+  ggplot(aes(x = estimate, color = method, fill = method)) +
+  geom_density(alpha = 0.2) +
+  geom_vline(xintercept = model_coefs[2], linetype = 3, size = 1, color = "magenta") +
+  geom_vline(aes(xintercept = median(estimate)), linetype = 3, size = 1) +
+  theme_bw()
+```
+
+Looks like in this case, all three methods are giving us strikingly similar sampling distributions. In this case, when we know that our original data takes an additive, normal structure, the assumptions we made in our parametric & semi-parametric analyses are in fact correct assumptions about the original data. This means that all three methods are essentially telling us the same thing.
+
+Don't let this lull you into a false sense of security about parametric bootstrapping, though!
+
+# Example: bootstrapping SE for regression coefficient, simulated linear/NON-normal data
+
+```{r}
+data_abnormal <- tibble(id = 1:100) %>%
+  mutate(intercept_true = 1,
+         slope_true = 0.7,
+         noise_bound_lower = -3,
+         noise_bound_upper = 3,
+         x = rnorm(n(), mean = 0, sd = 2), # dplyr::n() is a tidy helper that returns n_observations in the current group
+         y = intercept_true + slope_true*x + runif(n(),
+                                                   min = noise_bound_lower,
+                                                   max = noise_bound_upper))
+
+head(data_abnormal)
+```
+
+```{r}
+data_abnormal %>%
+  ggplot(aes(x = x, y = y)) +
+  geom_point() +
+  theme_bw()
+```
+
+Fitting our initial regression model to get our estimated coefficients:
+
+```{r}
+model_abnormal <- lm(y ~ x, data = data_abnormal)
+
+summary(model_abnormal)
+```
+
+## Estimating all three bootstrap methods... at once!
+
+Since we've already walked through the mechanics of estimating each of the three bootstrapping methods separately, I'll show you how I like to implement this in my own analyses, in a sort of ultra-tidy analysis. Since the model fitting and coefficient extraction steps are exactly the same in all three boot methods, we can combine the three different data generation methods in one tibble, and then call the model fitting/coefficient extraction on all of the datasets at once!
+
+```{r}
+# For the parametric bootstrap
+x_params_emp_abnormal <- data_abnormal %>%
+  summarize_at(vars(x), c("length", "mean", "sd"))
+
+model_coefs_abnormal <- coef(model_abnormal)
+model_sigma_abnormal <- summary(model_abnormal)$sigma
+
+# For the semi-parametric bootstrap
+
+model_residuals_abnormal <- model_abnormal$residuals
+
+# Let's generate some data!!!
+
+boots_abnormal <- rsample::bootstraps(data_abnormal, times = n_boots) %>%
+  mutate(iteration = 1:n(),
+         data_boot_nonparametric = map(splits, ~as_tibble(.)),
+         data_boot_parametric = rerun(n(),
+                                      tibble(x = rnorm(x_params_emp_abnormal$length,
+                                                       mean = x_params_emp_abnormal$mean,
+                                                       sd = x_params_emp_abnormal$sd)) %>%
+                                        mutate(y = model_coefs_abnormal[1] +
+                                                 model_coefs_abnormal[2]*x +
+                                                 rnorm(nrow(.), mean = 0, sd = model_sigma_abnormal))),
+         data_boot_semiparametric = rerun(n(),
+                                          tibble(x = rnorm(x_params_emp_abnormal$length,
+                                                           mean = x_params_emp_abnormal$mean,
+                                                           sd = x_params_emp_abnormal$sd)) %>%
+                                            mutate(y = model_coefs_abnormal[1] +
+                                                     model_coefs_abnormal[2]*x +
+                                                     sample(model_residuals_abnormal,
+                                                            size = nrow(.),
+                                                            replace = T)
+                                            )
+         )
+  ) %>%
+  # This is where the magic starts to happen
+  select(iteration, starts_with("data_boot"))
+
+# In this strategy, we need to strip the special classes from the tibble output by bootstraps()
+# It causes the tibble to behave poorly with other data manipulation functions
+attr(boots_abnormal, "class") <- c("tbl_df", "tbl", "data.frame")
+
+boots_abnormal <- boots_abnormal %>%
+  gather(key = method, value = data_boot, -iteration) %>%
+  mutate(method = str_sub(method, start = 11L),
+         model_boot = map(data_boot, ~lm(y ~ x, data = .)),
+         coefs_boot = map(model_boot, ~as_tibble(tidy(.))))
+```
+
+Now, since all three methods were in the same mega-tibble, we don't need to use `bind_rows()` to collect all the coefficient estimates together.
+
+```{r}
+estimates_abnormal <- boots_abnormal %>%
+  select(iteration, method, coefs_boot) %>%
+  unnest(coefs_boot)
+```
+
+```{r}
+estimates_abnormal %>%
+  filter(term == "x") %>%
+  ggplot(aes(x = estimate, color = method, fill = method)) +
+  geom_density(alpha = 0.2) +
+  geom_vline(xintercept = model_coefs_abnormal[2], linetype = 3, size = 1, color = "magenta") +
+  geom_vline(aes(xintercept = median(estimate)), linetype = 3, size = 1) +
+  theme_bw()
+```
+
+# Example: Bootstrapping SE for fixed effect, simulated linear multilevel data
+
+```{r}
+# ml stands for multilevel, not maximum likelihood... I know, I hate acronym reuse too
+data_ml <- tibble(id = 1:50) %>%
+  mutate(group_status = id %% 2, # such that group status is a 0/1 indicator var
+         group_effect = rnorm(n(), mean = 0.5, sd = 1),
+         intercept = rnorm(n(), mean = 0, sd = 1),
+         slope = rnorm(n(), mean = 1, sd = 0.5),
+         observations = pmap(list(intercept, slope, group_status, group_effect),
+                             function(a, b, c, d) {
+                               tibble(index = 1:5) %>%
+                                 mutate(x = rnorm(nrow(.), 0, 1),
+                                        y = a + b*x + c*d + rnorm(nrow(.), 0, 2))
+                             }))
+```
+
+```{r}
+data_ml %>%
+  unnest(observations) %>%
+  ggplot(aes(x = x, y = y, color = factor(group_status))) +
+  geom_line(aes(group = factor(id)), alpha = 0.3) +
+  geom_point() +
+  theme_bw() +
+  guides(color = FALSE)
+```
+
+```{r}
+model_ml <- lmer(y ~ x + group_status + (1 | id), data = unnest(data_ml)) # Calling unnest() inside the lmer() call because lmer() doesn't currently auto-detect nested data, and expects fully long-form data
+
+summary(model_ml)
+```
+
+
+## How to generate/resample multilevel data?
+
+In a multilevel model, with additional model terms to estimate come additional assumptions we have to reckon with in attempting to bootstrap data. We need to consider:
+
+* The fixed, or grouping-level, effects
+    + Estimated once over all groups of observations
+* The random, or within-grouping, effects
+    + Estimated for each group of observations as a draw from a normal distribution
+* Error terms
+    + One per observation
+
+Now, when bootstrapping, we not only have to decide whether we'll assume that the generating model (fixed effects) and error terms are truly as estimated, but also whether we'll assume that the random effects for each group are truly as estimated.
+
+We can structure our assumptions as such:
+
+* **Parametric** bootstrapping assumes that:
+    + we know the true fixed effects of the generating model
+    + we know the true random effects specific to each group of observations
+    + we know the true shape/size of the noise distribution around the generating model
+* **Non-parametric** bootstrapping assumes that:
+    + we do not know the true values of the generating model
+    + we do not know the true random effects
+    + we do not know the true shape/size of the noise distribution
+
+You might wonder what happened to semi-parametric bootstrapping. Bootstrapping for multilevel data is much messier than bootstrapping for single-level data, and so keeping track of the fixed and random components of each error term can be quite a task. There are methods proposed for implementing semi-parametric bootstrapping on multilevel data, but we won't get into them here.
+
+## She got a big bootstrap, so I call her big bootstrap
+
+We'll be using different strategies for generating bootstrapped multilevel datasets. It's not as straightforward to pull out model terms and generate predicted outcome values for the parametric bootstrap by calculating them by hand as we did previously. This time, we'll be using `simulate()` to do the heavy lifting to generate predicted outcome values using the parameters estimated from our original model.
+
+For our non-parametric bootstrap, we'll still be resampling cases of data, but this time, instead of resampling individual observations, we'll resample groups of observations as a unit. Group-wise, or clustered, resampling keeps all the observations for one group together, while still giving us an empirical distribution of groups from which to draw. In this way, we can retain the within-group variance as it appears in the original data, but without making any assumptions about what the random effects actually are, as parametric bootstrapping would do.
+
+```{r}
+# Resetting this for multilevel model, just in case
+n_boots <- 800L
+
+boots_ml <- bootstraps(data = data_ml, times = n_boots) %>%
+  mutate(iteration = 1:n(),
+         data_boot_nonparametric = map(splits, ~as_tibble(.) %>%
+                                         mutate(id_boot = 1:nrow(.))),
+         data_boot_parametric = rerun(n(), data_ml %>%
+                                        unnest(observations) %>%
+                                        select(-y) %>%
+                                        # simulate()'s method has special behavior for lmer objects
+                                        # use.u = F means that a new random effect is drawn for each instance
+                                        # functionally similar to drawing new "subjects" from the estimated population
+                                        bind_cols(simulate(model_ml, nsim = 1, use.u = F)) %>%
+                                        rename(id_boot = id, y = sim_1))) %>%
+  select(iteration, starts_with("data_boot"))
+
+attr(boots_ml, "class") <- c("tbl_df", "tbl", "data.frame")
+
+boots_ml <- boots_ml %>%
+  gather(key = method, value = data_boot, -iteration) %>%
+  mutate(method = str_sub(method, start = 11L),
+         model_boot = map(data_boot, ~lmer(y ~ x + group_status + (1 | id_boot), data = unnest(.))),
+         coefs_boot = map(model_boot, ~as_tibble(tidy(.))))
+```
+
+We need to create this new `id_boot` column in order to trick `lmer()` into treating each resampled subject as a distinct subject. If we don't do this, a subject who's resampled n times in a given bootstrapped dataset will appear to have n times as much data if we feed the data back into `lmer()`, as opposed to n different subjects with the same data.
+
+## Graphing output
+
+```{r}
+estimates_ml <- boots_ml %>%
+  select(iteration, method, coefs_boot) %>%
+  unnest(coefs_boot)
+```
+
+```{r}
+estimates_ml %>%
+  filter(term %in% c("x", "group_status")) %>%
+  ggplot(aes(x = estimate, color = method, fill = method)) +
+  geom_density(alpha = 0.2) +
+  facet_grid(~ term, scales = "free_x") +
+  theme_bw()
+```
+
+```{r}
+estimates_ml %>%
+  filter(term %in% c("x", "group_status")) %>%
+  group_by(method, term) %>%
+  summarize(sd(estimate))
+```
+
+
+# Why not use the boot package?
+
+There are ample packages devoted to assisting with bootstrap analyses, `boot` perhaps being the oldest and best-known among them. Once you know which of the three bootstrapping methods you want to use, and understand the mechanics of _how_ your chosen method generates bootstrapped datasets, you're ready to choose a ready-made bootstrapping function if you want to use one.
+
+`boot::boot()` will do very many things for you, but I have typically not used this function because it doesn't play super cleanly with the `tidyverse`, and I prefer a bit more transparency about how bootstrap resampling is conducted.
+
+I like to use `rsample::bootstraps()` to generate non-parametric resampled datasets, because I can then fit whatever I like to those datasets in a tidy context, and I still know exactly what's being done to my data, and can hold onto information from intermediate steps (e.g. the model object for each iteration). Most pre-packaged bootstrapping estimation functions are designed only to return the final estimate from each bootstrap iteration, and not whatever went into each iteration. In the interest of being conservative, I prefer to keep the intermediate model objects when possible.
+
+# References
+
+See helpful posts & online resources below that assisted me in preparing this document. :)
+
+https://janhove.github.io/teaching/2016/12/20/bootstrapping
