@@ -23,15 +23,11 @@ My goal here is twofold:
 * Map strategies that you already implement in a non-tidy way to their tidy counterparts
 * Demonstrate possible pain points in non-tidy methods that are resolved in the tidyverse
 
-## The tidy mantra
+### Please keep in mind!
 
-[Direct from Hadley](https://tidyverse.tidyverse.org/articles/manifesto.html)
+This vignette is **not** intended to be an exhaustive walkthrough of all functions from the indicated `tidyverse` packages.
 
-* Make things work with existing data types/structures
-* Pipe life
-* Lean into functional programming
-    + One function, one job. No ifs, ands, or buts!
-* Human read/writeability plz
+For reference, please see the excellent reference pages online for the relevant package. For a more detailed self-teaching experience, please refer to the incredible [R for Data Science online textbook](http://r4ds.had.co.nz/) by Garrett Grolemund and Hadley Wickham, which teaches using `tidyverse` functions.
 
 ## Quick reminder of key functions from various pkgs
 
@@ -54,53 +50,58 @@ To see all the functions in each pkg, visit their reference pages at tidyverse.o
 * `purrr`
     + all the `map()` functions: like `apply()` but tidy
     
+## Brief intro to the pipe
+
+Before we begin...
+
+Enter the pipe `%>%`! The pipe does one simple, but key, thing: **takes the object on the left-hand side and feeds it into the first argument of the function on the right-hand side.** This means that:
+
+* `a %>% foo()` is equivalent to `foo(a)`. Fine and good
+* `a %>% foo() %>% bar(arg = TRUE)` is equivalent to `bar(foo(a), arg = TRUE)`. Now, nested function calls read left-to-right!
+* Most common use case: `df_new <- df_old %>% foo() %>% bar(arg = TRUE) %>% baz()` is equivalent to `df_new <- baz(bar(foo(df_old), arg = TRUE))`. Now, you can chain a series of preprocessing commands to operate on a dataframe all at once, and easily read those commands as typed in your script. No more accidentally not running some key preprocessing command that causes later code to break!
+
+Note that #pipelife requires functions to:
+
+* take as their first argument the object to be operated upon
+* return the same object (or an analog of said), but now operated upon
+
+Essentially all functions from the tidyverse are pipe-safe, but bear this in mind when trying to incorporate functions from base R or other packages into your tidy new world.
+
+## Initializing fake data
+
+We'll use a simulated dataset for this vignette, so you don't need to worry about any dependencies involving datasets you don't have access to while you're following along.
+
 ```{r}
-x <- 1:10
-stuff <- tibble(x = 1:5, y = letters[1:5], z = rnorm(5))
+# 20 fake subjects, 50 fake trials per subject
 
-more_stuff <- stuff %>%
-  filter(z > 0) %>%
-  mutate(z2 = x + z)
-```
-
-```{r}
-wm_tidy_cleaned <- wm_tidy %>%
-  rename(didProbeChange = cond) %>%
-  select(-groupStatus) %>%
-  select(subjNum, resp, RT, everything()) %>%
-  mutate(resp = recode(resp,
-                       j = 0L,
-                       k = 1L,
-                       .default = NA_integer_),
-         RT = na_if(RT, 0),
-         RTzAcross = scale(RT),
-         trialNumAcross = 1:n()) %>%
-  group_by(subjNum) %>%
-  mutate(RTzWithin = scale(RT),
-         trialNumWithin = 1:n())
-
-wm_lms <- wm_tidy_cleaned %>%
-  group_by(subjNum) %>%
-  nest(.key = "trialwise") %>%
-  mutate(model = map(trialwise, ~glm(resp ~ didProbeChange * numDistr,
-                                     family = binomial(link = "probit"),
-                                     data = .)),
-         coefs = map(model, ~broom::tidy(.))) %>%
-  unnest(coefs)
-
-wm_summary <- wm_tidy_cleaned %>%
-  group_by(subjNum, numDistr) %>%
-  summarize(RTmean = mean(RT, na.rm = TRUE),
-            RTmedian = median(RT, na.rm = TRUE))
-
-stuff_summary <- tibble(x = rnorm(10),
-                        y = rnorm(10),
-                        z = rnorm(10),
-                        a = letters[1:10]) %>%
-  summarize_if(is.numeric, funs(mean(., na.rm = TRUE), median(., na.rm = TRUE))) %>%
-  rename_at(vars(ends_with("mean")), funs(str_replace(., "mean", "average")))
-  # summarize_at(c("x", "y"), funs(mean(., na.rm = TRUE),
-                               #  median(., na.rm = TRUE)))
+# Will simulate the person-level variables FIRST,
+# then expand to simulate the trial-level variables
+raw <- tibble(id = 1L:20L,
+              age = sample(18L:35L, size = 20, replace = TRUE),
+              # assuming binary gender for the purposes of this simulation
+              gender = sample(c("male", "female"), size = 20, replace = TRUE)) %>%
+  # simulating some "questionnaire" scores; person-level
+  mutate(q_1 = rnorm(n = n(), mean = 30, sd = 10),
+              q_2 = rnorm(n = n(), mean = 30, sd = 10),
+              q_3 = rnorm(n = n(), mean = 30, sd = 10)) %>%
+  # slice() subsets rows by position; you can use it to repeat rows by repeating position indices
+  slice(rep(1:n(), each = 50)) %>%
+  # We'll get to this in a bit--this causes every "group"
+  # aka every set of rows with the same value for "id", to behave as an independent df
+  group_by(id) %>%
+  # I just want to have a column for "trial order", I like those in my task data
+  mutate(trial_num = 1:n(),
+         # Each subject sees half OLD and half NEW trials in this recognition memory task
+         is_old = rep(0L:1L, times = n()/2),
+         # I'm shuffling the order of "old" and "new" trials in my fake memory task
+         is_old = sample(is_old),
+         # This will generate binary "old"/"new" responses corresponding roughly to a d' of 1
+         # yep, everyone has the same d' today
+         response = if_else(is_old == 1,
+                            rbinom(n = n(), size = 1, prob = 0.7),
+                            rbinom(n = n(), size = 1, prob = 0.3)),
+         rt = rnorm(n = n(), mean = 3, sd = 1.5))
+  
 ```
 
 
@@ -120,10 +121,8 @@ ltm_raw_untidy <- read.csv("~/Dropbox/MMT/data/MMT_testTargets_all_final.csv", h
 
 Don't forget to plug `read_csv_multi()` from this package
 
-```{r}
-wm_raw_tidy <- read_csv("~/Dropbox/MMT/data/MMT_filterObjs_all_final.csv")
-
-ltm_raw_tidy <- read_csv("~/Dropbox/MMT/data/MMT_testTargets_all_final.csv")
+```{r, eval = FALSE}
+data <- read_csv("/path/to/data.csv")
 ```
 
 ### Key differences
@@ -166,13 +165,13 @@ Also, take a moment to talk about the Viewer--I myself used to be a stan for the
 `tibble` is LIFE
 
 ```{r}
-wm_raw_tidy
+raw
 ```
 
 How does she print this way? She is a tibble and she is beautiful. Note that packages within the tidyverse work together--raw rectangular data read in using `readr` is given the tibble class by default.
 
 ```{r}
-class(wm_raw_tidy)
+class(raw)
 ```
 
 `"tbl_df"` is the class name for tibbles.
@@ -201,94 +200,60 @@ There are a couple other useful things that tibbles do that dataframes don't, bu
 
 We'll deal with subsetting dataframes two ways: choosing a subset of columns and a subset of rows.
 
-### Non-tidy way
-
-Bracket indexing with [ , ] is probably one of the more common ways to subset dataframes in base R.
-
-#### Subsetting by column
-
-To subset columns by name in base R, a character vector of strings corresponding to valid column names can be passed into the column section of the bracket index, after the comma.
-
-I'm not going to even mention subsetting columns by position because I don't recommend it except in moments of dire need.
-
-```{r}
-wm_raw_tidy[, c("subjNum", "NumDistr", "Cond", "resp", "RT", "groupStatus")]
-```
-
-#### Subsetting by row
-
-Most subsetting by row will be logical subsetting, to return only rows that satisfy some condition. Note that in order to construct the logical vector that is used to index, columns that already live inside the dataframe must still be called from said dataframe using $ indexing. Bracket indexing is always done from the global environment (to be explained), which requires quite a bit of extra typing.
-
-Subsetting by row can also be done by position as well, but again, please don't do this in analysis scripts!
-
-```{r}
-wm_raw_tidy[wm_raw_tidy$subjNum == 4, ]
-```
-
-#### Subsetting by row and column simultaneously
-
-```{r}
-wm_raw_tidy[wm_raw_tidy$subjNum == 4, c("subjNum", "groupStatus", "NumDistr", "Cond", "resp", "RT")]
-```
-
 ### Tidy way
-
-**Warning:** enter the pipe `%>%`! Remember that the pipe does one simple, but key, thing: takes the object on the left-hand side and feeds it into the first argument of the function on the right-hand side. This means that:
-
-* `a %>% foo()` is equivalent to `foo(a)`. Fine and good
-* `a %>% foo() %>% bar(arg = TRUE)` is equivalent to `bar(foo(a), arg = TRUE)`. Now, nested function calls read left-to-right!
-* Most common use case: `df_new <- df_old %>% foo() %>% bar(arg = TRUE) %>% baz()` is equivalent to `df_new <- baz(bar(foo(df_old), arg = TRUE))`. Now, you can chain a series of preprocessing commands to operate on a dataframe all at once, and easily read those commands as typed in your script. No more accidentally not running some key preprocessing command that causes later code to break!
-
-Note that #pipelife requires functions to:
-
-* take as their first argument the object to be operated upon
-* return the same object (or an analog of said), but now operated upon
-
-Essentially all functions from the tidyverse are pipe-safe, but bear this in mind when trying to incorporate functions from base R or other packages into your tidy new world.
 
 #### Subsetting by column
 
 Note that these are **unquoted** variable names and not a character vector.
-```{r}
-# observe that the first argument is a tibble, and the output is that tibble but with stuff done to it
-select(wm_raw_tidy, subjNum, groupStatus, NumDistr, Cond, resp, RT)
-```
-
-Pipe 4 lyfe tho
-
-```{r}
-# This auto-indenting shit after the pipe works because the pipe is a left-right operator
-wm_raw_tidy %>%
-  select(subjNum, groupStatus, NumDistr, Cond, resp, RT)
-```
 
 Also, just some nice shit that you can do with `select()` etc
 
 ```{r}
-# Renaming columns is so smooth! Setting names in base R is such a biznatch
-wm_tidy <- wm_raw_tidy %>%
-  select(subjNum, groupStatus, numDistr = NumDistr, cond = Cond, resp, rt = RT)
-
-wm_tidy
+# This auto-indenting shit after the pipe works because the pipe is a left-right operator
+# Renaming columns is so smooth in the tidyverse!
+raw %>%
+  select(id, age, gender, trial_num, is_old, response, rt)
 ```
+
+```{r}
+# Renaming columns is so smooth in the tidyverse!
+raw %>%
+  select(subject_id = id, age, gender, trial_num, is_old, response, rt)
+```
+
+```{r}
+raw %>%
+  select(id, starts_with("q"))
+```
+
 
 #### Subsetting by row
 
 Notice that we no longer have to index the original dataframe when specifying the logical vector(s) that will be used to subset rows
 
 ```{r}
-wm_raw_tidy %>%
-  filter(subjNum == 4)
+raw %>%
+  filter(id == 13)
 ```
+
+Another function that technically "subsets" data, but not logically: `distinct()` is the `dplyr` function for removing rows with duplicate observations
+
+```{r}
+raw %>%
+  select(id, gender, age) %>%
+  # the .keep_all argument specifies whether to drop columns that aren't being distinct-ed by
+  distinct(id, .keep_all = TRUE)
+```
+
 
 #### Subsetting by row and column simultaneously
 
 In this case, order doesn't super matter, so it's a matter of personal preference. I would generally recommend putting all renaming calls as early as possible to allow the largest block of code to be consistent with itself.
 
 ```{r}
-wm_raw_tidy %>%
-  select(subjNum, groupStatus, numDistr = NumDistr, cond = Cond, resp, rt = RT) %>%
-  filter(subjNum == 4)
+raw %>%
+  select(id, age, gender, trial_num, is_old, response, rt) %>%
+  filter(id == 13)
 ```
 
 ```{r}
@@ -296,9 +261,9 @@ wm_raw_tidy %>%
 # but it also has a nice feature: specifying separate logical statements as separate args,
 # separate by commas, implicitly acts like chaining the statements together with &
 # since the intersection of logical vectors is probably the most common use case for row subsetting
-wm_raw_tidy %>%
-  select(subjNum, groupStatus, numDistr = NumDistr, cond = Cond, resp, rt = RT) %>%
-  filter(subjNum == 4, numDistr == 0)
+raw %>%
+  select(id, age, gender, trial_num, is_old, response, rt) %>%
+  filter(id == 13, is_old == 1)
 ```
 
 ### Key differences
@@ -404,14 +369,3 @@ ltm_tidy <- ltm_raw_tidy %>%
   unnest(overall, .preserve = "data")
 # given that false alarms are all marked with numDistr == 0 may want to store this a slightly different way
 ```
-
-## Plotting data
-
-```{r}
-wm_tidy %>%
-  mutate(groupStatus = coalesce(groupStatus, "")) %>%
-  ggplot(aes(x = numDistr, y = k, color = groupStatus)) +
-  geom_line(aes(group = subjNum), alpha = 0.2) +
-  theme_bw()
-```
-
