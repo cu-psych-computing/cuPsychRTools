@@ -100,7 +100,8 @@ raw <- tibble(id = 1L:20L,
          response = if_else(is_old == 1,
                             rbinom(n = n(), size = 1, prob = 0.7),
                             rbinom(n = n(), size = 1, prob = 0.3)),
-         rt = rnorm(n = n(), mean = 3, sd = 1.5))
+         rt = rnorm(n = n(), mean = 3, sd = 1.5)) %>%
+  ungroup()
   
 ```
 
@@ -200,9 +201,7 @@ There are a couple other useful things that tibbles do that dataframes don't, bu
 
 We'll deal with subsetting dataframes two ways: choosing a subset of columns and a subset of rows.
 
-### Tidy way
-
-#### Subsetting by column
+### Subsetting by column
 
 Note that these are **unquoted** variable names and not a character vector.
 
@@ -227,7 +226,9 @@ raw %>%
 ```
 
 
-#### Subsetting by row
+### Subsetting by row
+
+#### Logical subsetting
 
 Notice that we no longer have to index the original dataframe when specifying the logical vector(s) that will be used to subset rows
 
@@ -235,6 +236,8 @@ Notice that we no longer have to index the original dataframe when specifying th
 raw %>%
   filter(id == 13)
 ```
+
+#### Getting only unique/un-duplicated rows
 
 Another function that technically "subsets" data, but not logically: `distinct()` is the `dplyr` function for removing rows with duplicate observations
 
@@ -245,8 +248,15 @@ raw %>%
   distinct(id, .keep_all = TRUE)
 ```
 
+#### Subsetting random rows
 
-#### Subsetting by row and column simultaneously
+This is something you might need to do on occasion. For example, sometimes when I want to plot single-subject data for just a few subjects from a dataset, I want to select a random subset of subjects so I'm not always just looking at the subjects who happened to be at the top of the df for whatever reason.
+
+`dplyr` contains the functions `sample_n()` and `sample_frac()`, which wrap `base::sample()` to let you quickly get a random subset of rows, specified either by number of rows to get or by fraction of total rows to get.
+
+Note that these work best if your df has one row per subject, because these don't select all the rows for a group.
+
+### Subsetting by row and column simultaneously
 
 In this case, order doesn't super matter, so it's a matter of personal preference. I would generally recommend putting all renaming calls as early as possible to allow the largest block of code to be consistent with itself.
 
@@ -270,28 +280,33 @@ raw %>%
 
 Bracket indexing always happens from the global environment, while `dplyr` column/row subsetting verbs all act first within the local environment of the tibble of interest. For example, this means that when specifying columns for logical subsetting, columns can be named bare, without referencing the home tibble using $. This minimizes typing and also risk of accidentally referencing objects you didn't mean to reference.
 
-## Reshaping data 
-
-### Non-tidy way
-
-Honestly, there are so many ways people can do this using older code--`reshape`, `reshape2`, etc etc.
-
-```{r}
-
-```
-
-
-### Tidy way
-
-`tidyr` goes here, maybe. Since the example starts with trialwise data, maybe not yet? Should wait until we get to summary statistics?
-
 ## Manipulating data
 
 `dplyr` goes here
 
-### Non-tidy way
+### Creating/modifying columns
 
-### Tidy way
+`dplyr::mutate()` will be your workhorse function for creating new columns or modifying existing ones in a df.
+
+Inside of every `mutate()` call, as with previous `tidyverse` functions, column names are fed in as symbols (like variables, without quotes) without needing to $ index them from the parent df every time.
+
+```{r}
+processed <- raw %>%
+  # select(-starts_with("q")) %>%
+  mutate(rt_ms = round(rt * 1000))
+```
+
+You can do anything inside a `mutate()` call that:
+
+* is totally element-wise
+* returns a vector of length 1 (this will recycle)
+* returns a vector of the same length as the total number of rows
+
+Like `tibble()` for creating tibbles, `mutate()` will _not_ recycle vectors longer than 1 but shorter than the input df. I like this behavior, as it has protected me on many occasions from creating columns that didn't contain what I meant them to! If you do have a vector that you WANT recycled into a column, I would feed that vector into `rep()` so that you can explicitly create an output vector of the right length.
+
+```{r}
+
+```
 
 ```{r}
 wm_tidy <- wm_raw_tidy %>%
@@ -337,6 +352,10 @@ wm_tidy <- wm_raw_tidy %>%
   unnest(overall, .preserve = "data")
 ```
 
+#### Nice helpers
+
+### Calculating summary statistics
+
 ```{r}
 ltm_tidy <- ltm_raw_tidy %>%
   select(subjNum, groupStatus, numDistr = NumDistractorsStudy, oldNew = OldNew, resp = recogresp, rt = recogRT) %>%
@@ -369,3 +388,130 @@ ltm_tidy <- ltm_raw_tidy %>%
   unnest(overall, .preserve = "data")
 # given that false alarms are all marked with numDistr == 0 may want to store this a slightly different way
 ```
+
+Handily, `dplyr`'s general function for calculating summary statistics is `summarize()`! You can use this to generate any single summary value on a vector you can think of--mean, median, SD, you name it.
+
+What constitutes a summary statistic? In this case, _any function that operates on a vector (or multiple vectors) and returns a single value (length 1) as output._ Gotta be length 1!
+
+In `summarize()`, as in `mutate()`, the argument name will be the name of the new column generated by the code provided in the argument value.
+
+(If you DON'T specify the column name (by leaving the argument name empty), the code you provided to calculate the column will automatically be substituted in as the name for the column. Don't do this...)
+
+```{r}
+# Just trying not to overload any function names
+summaries <- processed %>%
+  summarize(rt_mean = mean(rt),
+            rt_median = median(rt))
+```
+
+#### Special versions of summarize()
+
+`summarize()` lets you custom-specify every summary statistic you want to calculate, which is very nice indeed. Sometimes, however, you may have cases where you would like to calculate the same statistic(s) on very many variables, and you wouldn't like to type each of those out. We can handle this!
+
+The two functions I use most often for this purpose are `summarize_if()` and `summarize_at()`.
+
+`summarize_if()` lets you specify summary functions, and then applies those functions to _every column in your starting df that meets some logical criteria._ For example, let's say you want to calculate the mean and median of every column in a df that contains numeric data.
+
+```{r}
+# Creating one character column and three numeric columns so you can see that the character column shan't appear in the output of summarize_if()
+tibble(chars = letters[1:10],
+       nums1 = rnorm(10, mean = 0, sd = 1)) %>%
+  mutate(nums2 = rnorm(n(), mean = 100, sd = 20),
+         nums3 = rnorm(n(), mean = 0, sd = 20)) %>%
+  summarize_if(is.numeric, funs(avg = mean(.),
+                                median = median(.)))
+```
+
+The first true argument of `summarize_if()` is `.predicate`, where you specify the tester function that should return `TRUE` or `FALSE` for every **column** in your starter df.
+
+The next argument is `.funs`, where you specify the summary function(s) you would like done to all of the columns for which `.predicate` returns `TRUE`. `dplyr` provides the helper function `funs()` to generate a list of function calls in the right format to be fed into `summarize_if()`. All you need is to specify the input function calls, each separated by a comma. The period **.** in the function calls represents "this df in which we are working". This allows you to tell `tidyverse` functions which argument in your summary functions will receive the data from the starter df that's being summarized. This is useful in cases where you have a summary function where the data isn't the first argument; this way you can make sure the data to be summarized doesn't get sent into the wrong argument and gums up the works.
+
+You can see that `funs()` allows you to name the function calls you enter inside it, and that `summarize_if()` automatically appends the provided names of functions to the output cols.
+
+The other specialty summarizing function, `summarize_at()`, does not use a logical predicate function to choose columns to summarize, but instead allows you to specify by name all the columns to summarize.
+
+Instead of specifying a function in `.predicate`, that argument is replaced with `.vars`, where you specify the variables you want. You can do this a couple of ways:
+
+With a character vector explicitly naming each column you want as a string:
+
+```{r}
+tibble(chars = letters[1:10],
+       nums1 = rnorm(10, mean = 0, sd = 1)) %>%
+  mutate(nums2 = rnorm(n(), mean = 100, sd = 20),
+         nums3 = rnorm(n(), mean = 0, sd = 20)) %>%
+  summarize_at(c("nums1", "nums2"), funs(avg = mean(.),
+                                         median = median(.)))
+```
+
+With `tidyselect` helpers:
+
+```{r}
+tibble(chars = letters[1:10],
+       nums1 = rnorm(10, mean = 0, sd = 1)) %>%
+  mutate(nums2 = rnorm(n(), mean = 100, sd = 20),
+         # This one doesn't start with "nums" like the other two do, notice!
+         numbers3 = rnorm(n(), mean = 0, sd = 20)) %>%
+  summarize_at(vars(starts_with("nums")), funs(avg = mean(.),
+                                               median = median(.)))
+```
+
+Note that here, you have to wrap your `tidyselect` call (in this case `starts_with()`) inside a `vars()` call. `dplyr::vars()` is a helper function that lets you use `tidyselect` helper functions inside other `tidyverse` functions that aren't `select()`.
+
+### Grouping
+
+`dplyr` supports _grouping_ within dfs/tibbles. This means that, if groups are defined in your df, all operations that in some way operate along the nrows of your df now operate _independently for each group._ Your df still looks the same, but this grouping metadata will affect the behavior of some other `dplyr` functions called on your data.
+
+```{r}
+raw %>%
+  group_by(id) %>%
+  summarize(rt_median = median(rt))
+```
+
+You can group by as many variables as you would like. Each group will be composed of the observations belonging to one of the unique combinations of grouping variable levels present in your data.
+
+### Creating new rows
+
+#### Repeating rows
+
+This strategy is inspired by a Stack Overflow post that I can't seem to find now, but I find this useful when I am generating simulated datasets with multilevel structure. Essentially, because `dplyr::slice()` and other numeric indexing methods (base R bracket indexing included) allow you to index the same position multiple times to get repeats in your output, you can repeat rows in your df by using `slice()` to index the same row multiple times.
+
+If you want to repeat every row in your df, you can use the below syntax to `rep()` every index in your df (`1:n()`) `each` number of times. Specifying `each` instead of `times` ensures that all repeats of the same row stay next to each other, which is useful if you use this strategy to expand simulated person-level data to accommodate multiple observations per person.
+
+```{r}
+tibble(x = letters[1:5]) %>%
+  slice(rep(1:n(), each = 3))
+```
+
+
+#### Completing combinations of grouping variables
+
+There might be situations (particularly, those that are about to be fed into a `summarize()` call) where you want to complete combinations of grouping variables that might not exist in your data. For example, you might be working with a task where each trial can have a correct or incorrect response, and you'd like to use `summarize()` to count up the total number of correct and incorrect responses per person. If you have some star subject who gets all their trials correct, there will be no instances of that subject and the "incorrect" response value, so instead of showing a count of 0 rows, the summary will just be missing that row.
+
+After you've called `summarize()`, you can use `tidyr::complete()` to create all the grouping variable combos you might have been missing (because they had no instances to count).
+
+```{r}
+tibble(x = letters[1:5]) %>%
+  slice(rep(1:n(), each = 3)) %>%
+  mutate(y = rbinom(n(), 1, 0.5)) %>%
+  count(x, y) %>%
+  # complete() must be called on ungrouped data, otherwise it attempts to complete the groups independently, which means it doesn't recognize when one group has levels of a variable that another group doesn't have
+  ungroup() %>%
+  complete(x, y, fill = list(n = 0L))
+```
+
+More broadly, you can use `tidyr` functions to do what you might do using `base::expand.grid()`, but with a bit more control. `tidyr::crossing()` is directly analogous to `base::expand.grid()`, in that it will create every possible combination of each of the provided variable levels.
+
+```{r}
+# in crossing(), vectors listed first will repeat slowest
+crossing(x = letters[1:2], y = letters[3:4], z = 1:2)
+```
+
+## Reshaping data 
+
+`tidyr` goes here, maybe. Since the example starts with trialwise data, maybe not yet? Should wait until we get to summary statistics?
+
+### From long to wide
+
+
+
+### From wide to long
