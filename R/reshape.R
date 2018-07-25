@@ -113,14 +113,17 @@ super_gather <- function (data, key = "key", key_names = NULL, value_names = NUL
       gather_regexp  <- paste0(gather_names, "$", collapse = "|")
     }
   } else if (!is.null(value_names)) {
-    intos = list(skey = "name_part",
-                 key = "other_part")
+    intos = list(key = "other_part",
+                 skey = "name_part")
     if (name_order == "key_first") {
       gather_regexp <- paste0(gather_names, "$", collapse = "|")
     } else if (name_order == "value_first") {
       gather_regexp <- paste0("^", gather_names, collapse = "|")
     }
   }
+  
+  # so that the subsequent renaming of name_part and other_part will be the user-specified key name
+  names(intos)[1] = key
   
   output <- data %>%
     gather(gkey, value, dplyr::matches(gather_regexp)) %>%
