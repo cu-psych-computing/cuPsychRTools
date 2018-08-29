@@ -15,6 +15,9 @@ This package currently functions as a catch-all package for various data reading
     + `read_delim_multi()` wraps `readr::read_delim()` for your nonspecific delimited needs
 * `super_spread()`: A wrapper around `tidyr::spread()` that allows you to simultaneously spread multiple columns of values that correspond to the same key column.
 * `super_gather()`: A wrapper around `tidyr::gather()` that allows you to simultaneously gather multiple groups of columns that will correspond to the same key column.
+* Tidyverse-safe row sums & row means that take column names as arguments, not a matrix
+    + `tidy_row_sums()` & `tidy_row_means()` work inside of `mutate()`
+    + `tidyselect_row_sums()` & `tidyselect_row_means()` work on their own in `%>%`-chains, and accept `tidyselect` helpers to specify columns
 
 ## Contact
 

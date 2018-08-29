@@ -3,15 +3,18 @@
 \name{tidy_row_sums}
 \alias{tidy_row_sums}
 \alias{tidy_row_means}
-\title{Calculate row sums & means tidyverse-safely.}
+\title{Calculate row sums & means mutate-safely.}
 \usage{
-tidy_row_sums(...)
+tidy_row_sums(..., na.rm = FALSE)
 
-tidy_row_means(...)
+tidy_row_means(..., na.rm = FALSE)
 }
 \arguments{
-\item{...}{One or more unquoted variable names. Does not currently accept
-\code{\link[tidyselect]{select_helpers}} (hopefully to be added soon).}
+\item{...}{One or more unquoted variable names.
+Does not accept \code{\link[tidyselect]{select_helpers}}, but is usable inside of \code{\link[dplyr]{mutate}}.}
+
+\item{na.rm}{a logical value indicating whether NA values should be stripped
+before the computation proceeds.}
 }
 \value{
 A vector of equal length to each of the input vectors/columns.
@@ -19,6 +22,12 @@ A vector of equal length to each of the input vectors/columns.
 \description{
 Wrapper around \code{\link[base]{rowSums}} etc. to allow
 calculating row sums and means of flexibly supplied column names
-from a df with \code{link[dplyr]{select}}-style syntax. Safe to
-use inside of \code{\link[dplyr]{mutate}}.
+from a df. Designed for use inside of \code{\link[dplyr]{mutate}}.
+}
+\examples{
+data <- tibble::tibble(x1 = 1:5, x2 = 1:5, x3 = 1:5)
+
+dplyr::mutate(data,
+xsum = tidy_row_sums(x1, x2, x3),
+xmean = tidy_row_means(x1, x2, x3))
 }
