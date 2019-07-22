@@ -33,7 +33,7 @@ str_locate_whichever <- function (string, patterns) {
   
   out <- map(patterns, ~str_locate(string, .)) %>%
     reduce(cbind) %>%
-    as_tibble() %>%
+    as_tibble(.name_repair = "universal") %>%
     mutate(starts = coalesce(!!! select(., starts_with("start"))),
            ends = coalesce(!!! select(., starts_with("end"))))
   
