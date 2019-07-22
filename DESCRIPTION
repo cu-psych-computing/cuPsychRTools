@@ -14,7 +14,7 @@ Imports: dplyr,
   readr,
   rlang,
   stringr,
-  tibble,
+  tibble (>= 2.1.1),
   tidyr
 Suggests: testthat
 RoxygenNote: 6.0.1
