@@ -61,7 +61,7 @@ super_spread <- function (data, key, ..., name_order = "value_first", sep = "_",
 #' key(s) to be spelled identically in names of columns to be gathered.
 #' 
 #' @export
-#' @importFrom dplyr as_tibble if_else matches mutate rename select
+#' @importFrom dplyr as_tibble bind_cols if_else matches mutate rename select
 #' @importFrom magrittr %>%
 #' @importFrom rlang is_character
 #' @importFrom stringr str_sub
@@ -127,7 +127,7 @@ super_gather <- function (data, key = "key", key_names = NULL, value_names = NUL
   
   output <- data %>%
     gather(gkey, value, dplyr::matches(gather_regexp)) %>%
-    cbind(str_locate_whichever(.$gkey, gather_names)) %>%
+    bind_cols(as_tibble(str_locate_whichever(.$gkey, gather_names))) %>%
     as_tibble() %>%
     mutate(name_part = str_sub(gkey, start = start, end = end),
            other_part = if_else(start != 1,
